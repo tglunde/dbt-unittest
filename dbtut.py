@@ -22,8 +22,11 @@ def main():
         df = pd.DataFrame.from_records(
             testdata[tablename], 
             columns=testdata[tablename][0].keys())
-        df.to_sql(tablename, db, if_exists='replace',)
-    
+        schema_tablename = tablename.split('.', 1)
+        if not db.dialect.has_schema(db, schema_tablename[0]):
+            db.execute(sqlalchemy.schema.CreateSchema(schema_tablename[0]))
+        df.to_sql(schema_tablename[1], db, schema=schema_tablename[0], if_exists='replace', index=False)
+    print("{} inserted!".format(pathlib.PurePosixPath(document_path).name))
 
 if __name__ == "__main__":
     main()
