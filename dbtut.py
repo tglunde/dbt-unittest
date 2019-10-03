@@ -19,7 +19,7 @@ def get_dataset():
     return tests
 
 
-def insert_data(document_path):
+def insert_data(document_path, db):
     test_data = {}
     for event, element in ET.iterparse(document_path, events=('start', 'end')):
         if event == 'start' and element.tag!='dataset':
@@ -33,12 +33,16 @@ def insert_data(document_path):
             for attribute in element.attrib.items():
                 test_row[attribute[0]] = attribute[1]
 
-    db = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres')
     for table_name in test_data.keys():
         df = pd.DataFrame.from_records(
             test_data[table_name], 
             columns=test_data[table_name][0].keys())
-        schema_table_name = table_name.split('.', 1)
+        
+        df.to_csv('data.csv', index=False)
+        df = pd.read_csv('data.csv')
+        os.remove('data.csv')
+        
+        schema_table_name = table_name.lower().split('.', 1)
         if not db.dialect.has_schema(db, schema_table_name[0]):
             db.execute(sqlalchemy.schema.CreateSchema(schema_table_name[0]))
         df.to_sql(schema_table_name[1], db, schema=schema_table_name[0], if_exists='replace', index=False)
@@ -46,13 +50,18 @@ def insert_data(document_path):
 
 
 def main():
+    db = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres')
     dataset = get_dataset()
 
     for key, value in dataset.items():
         if key == 'dataset':
-            for doc in value:
-                if doc.name.endswith('.xml'):
-                    insert_data(doc)
+            for row in value:
+                if row.name.endswith('.xml'):
+                    insert_data(row, db)
+                elif row.name.endswith('.dml'):
+                    with open(row) as dml_script:
+                        script = dml_script.read()
+                        db.execute(script)
 
 
 if __name__ == "__main__":
