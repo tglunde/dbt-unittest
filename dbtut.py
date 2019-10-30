@@ -35,8 +35,6 @@ def insert_data(document_path, db):
             testtable.append(testrow)
             for attribute in element.attrib.items():
                 testrow[attribute[0].lower()] = attribute[1]
-            #print(testdata)
-    #db = sqlalchemy.create_engine('postgresql://postgres:psql1234@localhost/postgres')
     for tablename in testdata.keys():
         df = pd.DataFrame.from_records(
             testdata[tablename],
@@ -62,7 +60,7 @@ def recreate_tables(db):
 
 
 def truncate_db(db):
-    meta = MetaData(bind=db)
+    meta = sqlalchemy.MetaData(bind=db)
     meta.reflect()
     con = db.connect()
     trans = con.begin()
@@ -77,35 +75,42 @@ def main():
     start_time = time.perf_counter()
     start = time.process_time()
 
-    DBT_PROJECT_DIR = "..\\campaign"
+    dbt_project_dir = "..\\campaign"
 
-    db = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres', connect_args={'options': '-csearch_path=campaign_r'})
+    db_campaign_r = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres', connect_args={'options': '-csearch_path=campaign_r'})
+    db_campaign = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres', connect_args={'options': '-csearch_path=campaign'})
+    counter = 0
     dataset = get_dataset()
     test_count = [0, 0, 0]
+
+    recreate_tables(db_campaign_r)
+    subprocess.run("dbt run -m stage core", cwd=dbt_project_dir)
     for key, value in dataset.items():
-        recreate_tables(db)
         if key != 'dataset':
-            for k, v in dataset.items():
-                if k == 'dataset':
-                    for row in v:
-                        if row.name.endswith('.xml'):
-                            insert_data(row, db)
-                        elif row.name.endswith('.dml'):
-                            with open(row) as dml_script:
-                                script = dml_script.read()
-                                db.execute(script)
-                                script = ''
-                                print("Init script executed")
-            subprocess.run("dbt run", cwd=DBT_PROJECT_DIR)
+            truncate_db(db_campaign)
+            if counter < 1:
+                for k, v in dataset.items():
+                    if k == 'dataset':
+                        for file_path in v:
+                            if file_path.name.endswith('.xml'):
+                                insert_data(file_path, db_campaign_r)
+                            elif file_path.name.endswith('.dml'):
+                                with open(file_path) as dml_script:
+                                    script = dml_script.read()
+                                    db_campaign_r.execute(script)
+                                    script = ''
+                                    print("Init script executed")
+                counter += 1
+            subprocess.run("dbt run -m core", cwd=dbt_project_dir)
             with open(value[1]) as dml_script:
                 script = dml_script.read()
-                db.execute(script)
+                db_campaign.execute(script)
                 script = ''
                 print("{} Init script executed".format(key))
-            subprocess.run("dbt run -m mart", cwd=DBT_PROJECT_DIR)
+            subprocess.run("dbt run -m mart", cwd=dbt_project_dir)
             with open(value[0]) as dml_script:
                 script = dml_script.read()
-                result = db.execute(script).fetchall()
+                result = db_campaign.execute(script).fetchall()
                 test_count[0] += 1
                 for row in result:
                     print(row)
@@ -117,7 +122,6 @@ def main():
                     print(result)
                     print('{} TEST SUCCESS!'.format(key))
                 script = ''
-                #print("{} Expected script executed".format(key))
     print('\nTests executed: {} Tests succeded: {} Tests failed: {} \n'.format(test_count[0], test_count[1], test_count[2]))
     print('Execution time: {}'.format(time.perf_counter()-start_time))
     print('CPU execution time: {}'.format(time.process_time()-start))
