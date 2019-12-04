@@ -1,0 +1,5 @@
+appName: "dbtUnitTest"
+paths:
+  dbtProjDir: "../campaign"
+  datasetDir: "../campaign/unittest/AttributionAssisted"
+  sqlDumpPath: "../campaign/db/redshift/00_campaign_r/V1.0__campaign_r.sql"

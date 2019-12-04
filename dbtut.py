@@ -7,8 +7,8 @@ import time
 import subprocess
 
 
-def get_dataset():
-    directory = pathlib.Path("..\\campaign\\unittest\\AttributionAssisted")
+def get_dataset(dataset_dir):
+    directory = pathlib.Path(dataset_dir)
 
     tests = {}
     for row in [x for x in directory.iterdir() if x.is_dir()]:
@@ -22,7 +22,7 @@ def get_dataset():
     return tests
 
 
-def insert_data(document_path, db):
+def insert_xml_data(document_path, db):
     testdata = {}
     for event, element in ET.iterparse(document_path, events=('start', 'end')):
         if event == 'start' and element.tag != 'dataset':
@@ -51,10 +51,11 @@ def insert_data(document_path, db):
     print("{} inserted!".format(pathlib.PurePosixPath(document_path).name))
 
 
-def recreate_tables(db):
-    db.execute("DROP SCHEMA IF EXISTS campaign, campaign_r, campaign_mart, campaign_stg CASCADE; CREATE SCHEMA campaign_r;")
+def recreate_tables(db, sql_dump_path):
+    db.execute("DROP SCHEMA IF EXISTS campaign, campaign_r, campaign_mart, \
+        campaign_stg CASCADE; CREATE SCHEMA campaign_r;")
 
-    with open("..\\campaign\\db\\redshift\\00_campaign_r\\V1.0__campaign_r.sql") as sql_dump:
+    with open(sql_dump_path) as sql_dump:
         db.execute(sql_dump.read())
         print("Tables created")
 
@@ -71,43 +72,51 @@ def truncate_db(db):
     print("Data truncated!")
 
 
-def main():
+def insert_data(dataset, db_campaign_r):
+    for k, v in dataset.items():
+        if k == 'dataset':
+            for file_path in v:
+                if file_path.name.endswith('.xml'):
+                    insert_xml_data(file_path, db_campaign_r)
+                elif file_path.name.endswith('.dml'):
+                    with open(file_path) as dml_script:
+                        script = dml_script.read()
+                        db_campaign_r.execute(script)
+                        script = ''
+                        print("Init script executed")
+
+
+def test_exec(dataset_dir, sql_dump_path, dbt_proj_dir):
     start_time = time.perf_counter()
     start = time.process_time()
 
-    dbt_project_dir = "..\\campaign"
+    db_campaign_r = sqlalchemy.create_engine(
+        'postgresql://postgres@localhost/postgres',
+        connect_args={'options': '-csearch_path=campaign_r'})
+    db_campaign = sqlalchemy.create_engine(
+        'postgresql://postgres@localhost/postgres',
+        connect_args={'options': '-csearch_path=campaign'})
 
-    db_campaign_r = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres', connect_args={'options': '-csearch_path=campaign_r'})
-    db_campaign = sqlalchemy.create_engine('postgresql://postgres@localhost/postgres', connect_args={'options': '-csearch_path=campaign'})
     counter = 0
-    dataset = get_dataset()
+    dataset = get_dataset(dataset_dir)
     test_count = [0, 0, 0]
 
-    recreate_tables(db_campaign_r)
-    subprocess.run("dbt run -m stage core", cwd=dbt_project_dir)
+    recreate_tables(db_campaign_r, sql_dump_path)
+    subprocess.run("dbt run -m stage core", cwd=dbt_proj_dir)
+
     for key, value in dataset.items():
         if key != 'dataset':
             truncate_db(db_campaign)
             if counter < 1:
-                for k, v in dataset.items():
-                    if k == 'dataset':
-                        for file_path in v:
-                            if file_path.name.endswith('.xml'):
-                                insert_data(file_path, db_campaign_r)
-                            elif file_path.name.endswith('.dml'):
-                                with open(file_path) as dml_script:
-                                    script = dml_script.read()
-                                    db_campaign_r.execute(script)
-                                    script = ''
-                                    print("Init script executed")
+                insert_data(dataset, db_campaign_r)
                 counter += 1
-            subprocess.run("dbt run -m core", cwd=dbt_project_dir)
+            subprocess.run("dbt run -m core", cwd=dbt_proj_dir)
             with open(value[1]) as dml_script:
                 script = dml_script.read()
                 db_campaign.execute(script)
                 script = ''
                 print("{} Init script executed".format(key))
-            subprocess.run("dbt run -m mart", cwd=dbt_project_dir)
+            subprocess.run("dbt run -m mart", cwd=dbt_proj_dir)
             with open(value[0]) as dml_script:
                 script = dml_script.read()
                 result = db_campaign.execute(script).fetchall()
@@ -122,9 +131,9 @@ def main():
                     print(result)
                     print('{} TEST SUCCESS!'.format(key))
                 script = ''
-    print('\nTests executed: {} Tests succeded: {} Tests failed: {} \n'.format(test_count[0], test_count[1], test_count[2]))
+
+    print('\nTests executed: {} Tests succeded: {} Tests failed: {} \n'.format(
+        test_count[0], test_count[1], test_count[2]))
+
     print('Execution time: {}'.format(time.perf_counter()-start_time))
     print('CPU execution time: {}'.format(time.process_time()-start))
-
-if __name__ == "__main__":
-    main()
