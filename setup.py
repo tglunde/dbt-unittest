@@ -26,6 +26,6 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'dbtut = unittest.main:main',
+            'dbtut = unittest.test:main',
         ]}
 )

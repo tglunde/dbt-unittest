@@ -8,18 +8,18 @@ import subprocess
 
 
 def get_dataset(dataset_dir):
-    directory = pathlib.Path(dataset_dir)
+    data_and_test = pathlib.Path(dataset_dir)
 
-    tests = {}
-    for row in [x for x in directory.iterdir() if x.is_dir()]:
+    data_tests = {}
+    for directory in [x for x in data_and_test.iterdir() if x.is_dir()]:
         tests_table = []
-        if row.name not in tests:
-            tests[row.name] = tests_table
+        if directory.name not in data_tests:
+            data_tests[directory.name] = tests_table
         else:
-            tests_table = tests[row.name]
-        for docs in [y for y in row.iterdir()]:
+            tests_table = data_tests[directory.name]
+        for docs in [y for y in directory.iterdir()]:
             tests_table.append(docs)
-    return tests
+    return data_tests
 
 
 def insert_xml_data(document_path, db):
@@ -40,14 +40,12 @@ def insert_xml_data(document_path, db):
             testdata[tablename],
             columns=testdata[tablename][0].keys())
 
-        df.to_csv('data.csv', index=False)
-        df = pd.read_csv('data.csv')
-        os.remove('data.csv')
-
         schema_tablename = tablename.lower().split('.', 1)
         if not db.dialect.has_schema(db, schema_tablename[0]):
             db.execute(sqlalchemy.schema.CreateSchema(schema_tablename[0]))
-        df.to_sql(schema_tablename[1], db, schema=schema_tablename[0], if_exists='append', index=False)
+        df.to_sql(
+            schema_tablename[1], db, schema=schema_tablename[0],
+            if_exists='append', index=False)
     print("{} inserted!".format(pathlib.PurePosixPath(document_path).name))
 
 
@@ -64,62 +62,64 @@ def truncate_db(db):
     meta = sqlalchemy.MetaData(bind=db)
     meta.reflect()
     con = db.connect()
-    trans = con.begin()
 
-    for table in meta.sorted_tables:
-        con.execute(table.delete())
-    trans.commit()
+    for table in meta.tables:
+        con.execute('TRUNCATE TABLE ' + table)
     print("Data truncated!")
 
 
-def insert_data(dataset, db_campaign_r):
-    for k, v in dataset.items():
-        if k == 'dataset':
-            for file_path in v:
+def insert_data(dataset, db_schema_r):
+    for directory, files in dataset.items():
+        if directory == 'dataset':
+            for file_path in files:
                 if file_path.name.endswith('.xml'):
-                    insert_xml_data(file_path, db_campaign_r)
+                    insert_xml_data(file_path, db_schema_r)
                 elif file_path.name.endswith('.dml'):
                     with open(file_path) as dml_script:
                         script = dml_script.read()
-                        db_campaign_r.execute(script)
+                        db_schema_r.execute(script)
                         script = ''
                         print("Init script executed")
 
 
-def test_exec(dataset_dir, sql_dump_path, dbt_proj_dir):
+def prepare_data(db_schema_r, dataset_dir, sql_dump_path):
+    recreate_tables(db_schema_r, sql_dump_path)
+    dataset = get_dataset(dataset_dir)
+    insert_data(dataset, db_schema_r)
+
+
+def connect_db(uri, schema_name):
+    return sqlalchemy.create_engine(
+        uri, connect_args={'options': '-csearch_path=' + schema_name})
+
+
+def test_exec(db_schema_r, db_schema, dataset_dir, sql_dump_path, dbt_proj_dir):
     start_time = time.perf_counter()
     start = time.process_time()
-
-    db_campaign_r = sqlalchemy.create_engine(
-        'postgresql://postgres@localhost/postgres',
-        connect_args={'options': '-csearch_path=campaign_r'})
-    db_campaign = sqlalchemy.create_engine(
-        'postgresql://postgres@localhost/postgres',
-        connect_args={'options': '-csearch_path=campaign'})
 
     counter = 0
     dataset = get_dataset(dataset_dir)
     test_count = [0, 0, 0]
 
-    recreate_tables(db_campaign_r, sql_dump_path)
+    recreate_tables(db_schema_r, sql_dump_path)
     subprocess.run("dbt run -m stage core", cwd=dbt_proj_dir)
 
     for key, value in dataset.items():
         if key != 'dataset':
-            truncate_db(db_campaign)
+            truncate_db(db_schema)
             if counter < 1:
-                insert_data(dataset, db_campaign_r)
+                insert_data(dataset, db_schema_r)
                 counter += 1
             subprocess.run("dbt run -m core", cwd=dbt_proj_dir)
-            with open(value[1]) as dml_script:
-                script = dml_script.read()
-                db_campaign.execute(script)
+            with open(value[1]) as init_dml:
+                script = init_dml.read()
+                db_schema.execute(script)
                 script = ''
                 print("{} Init script executed".format(key))
             subprocess.run("dbt run -m mart", cwd=dbt_proj_dir)
-            with open(value[0]) as dml_script:
-                script = dml_script.read()
-                result = db_campaign.execute(script).fetchall()
+            with open(value[0]) as expected_dml:
+                script = expected_dml.read()
+                result = db_schema.execute(script).fetchall()
                 test_count[0] += 1
                 for row in result:
                     print(row)
