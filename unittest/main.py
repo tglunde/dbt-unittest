@@ -7,17 +7,27 @@ import sys
 from dbtut import *
 
 
-def map_db_type(dbt_db_name):
-    if dbt_db_name == 'postgres':
-        return 'postgresql+psycopg2'
-    elif dbt_db_name == 'bigquery':
+def map_db_type(dbt_db_type, profile):
+    if dbt_db_type == 'postgres' or dbt_db_type == 'redshift':
+        if profile.credentials['password']:
+            db_uri = "postgresql+psycopg2://{}:{}@{}/{}".format(
+                profile.credentials['user'], profile.credentials['password'],
+                profile.credentials['host'], profile.credentials['database'])
+        else:
+            db_uri = "postgresql+psycopg2://{}@{}/{}".format(
+                profile.credentials['user'], profile.credentials['host'],
+                profile.credentials['database'])
+    elif dbt_db_type == 'bigquery':
         pass
-    elif dbt_db_name == 'snowflake':
-        return 'snowflake'
-    elif dbt_db_name == 'redshift':
-        return 'postgresql+psycopg2'
+    elif dbt_db_type == 'snowflake':
+        db_uri = "snowflake://{}:{}@{}/{}/{}?warehouse={}&role={}".format(
+            profile.credentials['user'], profile.credentials['password'],
+            profile.credentials['account'], profile.credentials['database'],
+            profile.credentials['schema'], profile.credentials['warehouse'],
+            profile.credentials['role'])
     else:
-        pass
+        print("This database type is not supported!")
+    return db_uri
 
 
 def main():
@@ -33,15 +43,6 @@ def main():
     profile_yaml = read_profile(PROFILES_DIR)
     db_type = profile_yaml[profile.profile_name]['outputs'][profile.target_name]['type']
 
-    if profile.credentials['password']:
-        db_url = "postgresql+psycopg2://{}:{}@{}/{}".format(
-            profile.credentials['user'], profile.credentials['password'],
-            profile.credentials['host'], profile.credentials['database'])
-    else:
-        db_url = "postgresql+psycopg2://{}@{}/{}".format(
-            profile.credentials['user'], profile.credentials['host'],
-            profile.credentials['database'])
-
     parser = ArgumentParser()
     parser.add_argument('cmd', help="Option to perform (prepare, run, teardown)")
     parser.add_argument(
@@ -56,8 +57,9 @@ def main():
     args = parser.parse_args()
 
     db_schema_r_conn = connect_db(
-        db_url, '{}_r'.format(profile.credentials['schema']))
-    db_schema_conn = connect_db(db_url, profile.credentials['schema'])
+        map_db_type(db_type, profile), '{}_r'.format(profile.credentials['schema']))
+    db_schema_conn = connect_db(
+        map_db_type(db_type, profile), profile.credentials['schema'])
 
     if args.cmd == 'prepare':
         prepare_data(db_schema_r_conn, args.dataset, args.sqldump)
@@ -69,3 +71,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
